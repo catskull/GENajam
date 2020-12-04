@@ -120,7 +120,9 @@ SdFat sd;
 SdFile tfifile;
 SdFile dirFile;
 
-const uint8_t MaxNumberOfChars = 17; // only show 16 characters coz LCD
+const uint8_t MaxNumberOfChars = 255; // only show 16 characters coz LCD
+char buffer[16];
+char tfifilename[MaxNumberOfChars + 1];
 
 // Number of files found.
 uint16_t n = 0;
@@ -130,6 +132,12 @@ const uint16_t nMax = 64;
 
 // Position of file's directory entry.
 uint16_t dirIndex[nMax];
+
+// Variables to scroll file name on display
+uint8_t nameLen = 0;
+static long currentMillis;
+uint8_t currentChar = 0;
+bool shouldScroll = false;
 
 //----------------------------------------------
 
@@ -280,14 +288,14 @@ void setup()
   for (int i = 6; i > 0; i--)
   {
   tfichannel=i;
-  tfiselect();
+  tfiselect(i == 6);
   }
   
 } // void setup
 
 void loop()
 {
-
+scrollDisplay();
 MIDI.read();
 
   lcd_key = read_LCD_buttons();
@@ -309,7 +317,7 @@ MIDI.read();
       if(tfifilenumber[tfichannel-1]==(n)){ // if max files exceeded, loop back to start
       tfifilenumber[tfichannel-1]=0;
       }   
-      tfiselect();
+      tfiselect(true);
       break;
       }
       
@@ -319,7 +327,7 @@ MIDI.read();
       if(tfifilenumber[tfichannel-1]==-1){ // if min files exceeded, loop back to end
       tfifilenumber[tfichannel-1]=n-1;
       }
-      tfiselect();
+      tfiselect(true);
       break;
       }
       
@@ -452,7 +460,7 @@ MIDI.read();
       }
       for (int i = 6; i >= 1; i--) {
         tfichannel=i;
-        tfiselect();
+        tfiselect(i == 6);
       }      
       break;
       }
@@ -469,7 +477,7 @@ MIDI.read();
       }
       for (int i = 6; i >= 1; i--) {
         tfichannel=i;
-        tfiselect();
+        tfiselect(i == 6);
       }    
       break;
       }
@@ -616,7 +624,7 @@ int read_LCD_buttons() // function for reading the buttons
 
 void modechange(int modetype) // when the mode buttons are changed, cycle the modes
 {
-
+  shouldScroll = false;
   // modetype 1 = edit / preset cycle
   // modetype 2 = mono / poly cycle
 
@@ -726,6 +734,7 @@ void modechange(int modetype) // when the mode buttons are changed, cycle the mo
 
 void regionchange()
 {
+  shouldScroll = false;
   // increment the button
   if (region==0) 
   {region=1;}
@@ -758,7 +767,7 @@ void regionchange()
 void modechangemessage() // display temporary message
 {
 // if a mode switch message has been displayed for long enough, refresh the screen
-  
+  shouldScroll = false;
 if ((millis() - messagestart) > messagedelay && refreshscreen == 1) { 
   switch(mode){
     case 1:
@@ -792,7 +801,7 @@ if ((millis() - messagestart) > messagedelay && refreshscreen == 1) {
 } // end message refresh
 }
 
-void tfiselect() //load a tfi , send the midi, update screen
+void tfiselect(bool print) //load a tfi , send the midi, update screen
 {
 
     if (!tfifile.open(&dirFile, dirIndex[tfifilenumber[tfichannel-1]], O_RDONLY)) {
@@ -814,32 +823,47 @@ void tfiselect() //load a tfi , send the midi, update screen
 
     
     tfisend(tfiarray, tfichannel);
-
-     //get filename
-    char tfifilename[MaxNumberOfChars + 1];
-    tfifile.getName(tfifilename, MaxNumberOfChars);
-    tfifilename[MaxNumberOfChars]=0; //ensure  termination
     
-    //show filename on screen
-    lcd.clear();
-    lcd.setCursor(0,0);
-    if (mode==3) {  
-      lcd.write(byte(2));
-      lcd.print(" ");     
+    if (print) {
+      //get filename
+
+      tfifile.getName(tfifilename, MaxNumberOfChars);
+      tfifilename[MaxNumberOfChars]=0; //ensure  termination
+      //show filename on screen
+      lcd.clear();
+      lcd.setCursor(0,0);
+      if (mode==3) {  
+        lcd.write(byte(2));
+        lcd.print(" ");     
+      }
+      else {
+        lcd.write(byte(0));
+        lcd.print(tfichannel);  
+      }
+      lcd.print(" ");
+      lcd.write(byte(1));
+      printzeros(tfifilenumber[tfichannel-1]+1);
+      lcd.print(tfifilenumber[tfichannel-1]+1);
+      lcd.print("/");
+      printzeros(n);
+      lcd.print(n);
+
+      for (char t = 0; t < MaxNumberOfChars; t++) {
+        if (!isGraph(tfifilename[t])) {
+          nameLen = t;
+          break;
+        }
+      }
+
+      if (nameLen > 16) {
+        currentChar = 0;
+        shouldScroll = true;
+      } else {
+        currentChar = nameLen;
+      }
+      lcd.setCursor(0,1);
+      lcd.print(tfifilename);
     }
-    else {
-      lcd.write(byte(0));
-      lcd.print(tfichannel);  
-    }
-    lcd.print(" ");
-    lcd.write(byte(1));
-    printzeros(tfifilenumber[tfichannel-1]+1);
-    lcd.print(tfifilenumber[tfichannel-1]+1);
-    lcd.print("/");
-    printzeros(n);
-    lcd.print(n);
-    lcd.setCursor(0,1);
-    lcd.print(tfifilename);
 
    
     // TFI file closed ================
@@ -848,16 +872,36 @@ void tfiselect() //load a tfi , send the midi, update screen
   
 }
 
+void scrollDisplay() {
+  if (shouldScroll) {
+    if (currentChar <= (nameLen - 16) && (millis() - currentMillis >= 350)) {
+      for (uint8_t j = 0; j <= 15; j++) {
+        buffer[j] = tfifilename[currentChar + j];
+      }
+      currentMillis = millis();
+      currentChar++;
+      lcd.setCursor(0, 1);
+      lcd.print(buffer);
+    } else if (millis() - currentMillis >= 800) {
+      currentChar++;
+      shouldScroll = false;
+      currentMillis = millis();
+      lcd.setCursor(0, 1);
+      lcd.print(tfifilename);
+    }
+  }
+}
+
 
 void channelselect() //select a new channel, display current tfi on screen
 {
+  shouldScroll = false;
     if (!tfifile.open(&dirFile, dirIndex[tfifilenumber[tfichannel-1]], O_RDONLY)) {
       lcd.setCursor(0,0);
       lcd.print("CANNOT READ TFI");
   }
 
      //get filename
-    char tfifilename[MaxNumberOfChars + 1];
     tfifile.getName(tfifilename, MaxNumberOfChars);
     tfifilename[MaxNumberOfChars]=0; //ensure  termination
 
@@ -1027,7 +1071,7 @@ void tfisend(int opnarray[42], int sendchannel)
 
 void fmparamdisplay()
 {
-
+shouldScroll = false;
   uint8_t i; // for holding array number
 
   lcd.clear();
@@ -1385,7 +1429,7 @@ void fmparamdisplay()
 
 void operatorparamdisplay()
 {
-
+shouldScroll = false;
   MIDI.read();
   
   uint8_t currentpotvalue[4];
